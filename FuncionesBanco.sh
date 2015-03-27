@@ -1,7 +1,7 @@
 #!/bin/bash
 function ComprobarNumero(){
 	local NUMERO=$1
-	local CADENA='^-?[0-9]+$'	
+	local CADENA='^[0-9]+$'	
 	if [[ $NUMERO =~ $CADENA ]];then
 		return 0
 	else
@@ -22,11 +22,22 @@ function RutaBanco(){
 		fi	
 	done < banco.config
 }
+function RutaCuenta(){
+	local NUMEROCUENTA=$1
+	local RUTABANCO=$(RutaBanco)
+	local RUTACUENTA
+	RUTACUENTA=$RUTABANCO/"c"$NUMEROCUENTA".cue"
+	echo $RUTACUENTA
+}
 function DevolverUsuarios(){
 	local line
 	local ELEGIDO=$1
 	local APELLIDOS
+	local APELLIDO1
+	local APELLIDO2
 	local NOMBRE
+	local NOMBRE1
+	local NOMBRE2
 	local NUMERO
 	local FILE=$(RutaBanco)/clientes.conf
 	while read line;do
@@ -35,8 +46,10 @@ function DevolverUsuarios(){
 		NUMERO=$(echo $line | cut -d : -f 1)
 		APELLIDO1=$(echo $APELLIDOS | cut -d " " -f 1)
 		APELLIDO2=$(echo $APELLIDOS | cut -d " " -f 2)
-		if [ "$APELLIDO1" = "$ELEGIDO" -o "$APELLIDO2" = "$ELEGIDO" ];then
-			echo $APELLIDOS	$NOMBRE : $NUMERO	
+		NOMBRE1=$(echo $NOMBRE | cut -d " " -f 1)
+		NOMBRE2=$(echo $NOMBRE | cut -d " " -f 2)
+		if [ "$APELLIDO1" = "$ELEGIDO" -o "$APELLIDO2" = "$ELEGIDO" -o "$NOMBRE1" = "$ELEGIDO" -o "$NOMBRE2" = "$ELEGIDO" ];then
+			echo "$NOMBRE $APELLIDOS":"$NUMERO"	
 		fi
 	done < $FILE
 }
@@ -48,6 +61,7 @@ function CrearCuenta(){
 	local APELLIDOS
 	local LASTNUM
 	local NUMERO
+	local DESCUBRIMIENTO=0
 	local CONTROL=0
 	local FECHA=$(date +"%d/%m/%Y")
 	echo "----------------------Crear cuenta----------------------"
@@ -61,21 +75,26 @@ function CrearCuenta(){
 	done
 	read -p  "¿Cuales son los apellidos? " APELLIDOS
 	read -p  "¿Cuales es el nombre? " NOMBRE
+	read -p  "¿Cual es la cantidad de descubirmiento? " DESCUBRIMIENTO
+	if [ "$DESCUBRIMIENTO" = "" ];then
+		DESCUBRIMIENTO=0
+	else
+		DESCUBRIMIENTO="-"$DESCUBRIMIENTO
+	fi
 	while read line;do
 		LASTNUM=$(echo $line | cut -d ":" -f 1)
 	done < $FILE
 	let NUMERO=$LASTNUM+1
 	echo "El numero de cuenta sera: $NUMERO"
-	sed -i '$a '"$NUMERO:$APELLIDOS:$NOMBRE:$FECHA"'' $FILE
-	local FICHEROCUENTA=$RUTA/"c"$NUMERO".cue"	
+	sed -i '$a '"$NUMERO:$APELLIDOS:$NOMBRE:$FECHA:$DESCUBRIMIENTO"'' $FILE
+	local FICHEROCUENTA=$(RutaCuenta $NUMERO)
 	touch $FICHEROCUENTA
-	echo "Total:$SALDOINICIAL" > $FICHEROCUENTA
-	sed -i '$a '"I:$SALDOINICIAL:$FECHA:$SALDOINICIAL"'' $FICHEROCUENTA
+	echo "I:$SALDOINICIAL:$FECHA" > $FICHEROCUENTA
 }
 function ComprobarCuenta(){
 	local NUMEROC=$1
 	local RUTA=$(RutaBanco)
-	local FICHEROCUENTA=$RUTA/"c"$NUMERO".cue"
+	local FICHEROCUENTA=$(RutaCuenta $NUMEROC)
 	if [ -e $FICHEROCUENTA ];then
 		return 0
 	else
@@ -85,9 +104,26 @@ function ComprobarCuenta(){
 function SaldoCuenta(){
 	local NUMERO=$1
 	local RUTA=$(RutaBanco)
-	local FICHEROCUENTA=$RUTA/"c"$NUMERO".cue"
-	local SALDO=$(sed -n 1p $FICHEROCUENTA | cut -d ":" -f 2)
-	echo $SALDO
+	local FICHEROCUENTA=$(RutaCuenta $NUMERO)
+	local SALDO=""
+	while read line;do
+		local TIPO=$(echo $line | cut -d ":" -f 1)
+		local CANTIDAD=$(echo $line | cut -d ":" -f 2)
+		if [ $TIPO = "I" ];then
+			let SALDO=$SALDO+$CANTIDAD
+		else
+			let SALDO=$SALDO-$CANTIDAD
+		fi
+	done < $FICHEROCUENTA
+	echo $SALDO 
+}
+function NivelDescubierto(){
+	local RUTA=$(RutaBanco)
+	local FILE=$RUTA/clientes.conf	
+	local NUMEROCUENTA=$1
+	let NUMEROCUENTA++
+	local DESCUBIERTO=$(sed -n "$NUMEROCUENTA"p $FILE | cut -d ":" -f 5)
+	echo $DESCUBIERTO
 }
 function PagarRecibo(){
 	local NUMERO
@@ -102,15 +138,15 @@ function PagarRecibo(){
 			while true;do
 				read -p "De que cantidad es el recibo: " CANTIDAD
 				if ComprobarNumero $CANTIDAD;then
-					local FICHEROCUENTA=$RUTA/"c"$NUMERO".cue"
+					local FICHEROCUENTA=$(RutaCuenta $NUMERO)
 					local SALDO=$(SaldoCuenta $NUMERO)
-					if [ $SALDO -lt $CANTIDAD ];then
+					local DESCUBIERTO=$(NivelDescubierto $NUMERO)
+					let SALDO=SALDO-CANTIDAD
+					if [ $SALDO -lt $DESCUBIERTO ];then
 						echo "No hay suficiente saldo para realizar la operación."
 					else
-						let SALDO=SALDO-CANTIDAD
 						echo "El saldo actual de la cuenta es: $SALDO"
-						sed -i '$a '"R:$CANTIDAD:$FECHA:$SALDO"'' $FICHEROCUENTA
-						sed -i "s/Total:.*/Total:$SALDO/" $FICHEROCUENTA
+						sed -i '$a '"R:$CANTIDAD:$FECHA"'' $FICHEROCUENTA
 					fi
 					break
 				else
@@ -123,7 +159,6 @@ function PagarRecibo(){
 		fi
 	done
 }
-
 function RealizarIngreso(){
 	local NUMERO
 	local CANTIDAD
@@ -137,12 +172,11 @@ function RealizarIngreso(){
 			while true;do
 				read -p "Que cantidad desea ingresar: " CANTIDAD
 				if ComprobarNumero $CANTIDAD;then
-					local FICHEROCUENTA=$RUTA/"c"$NUMERO".cue"
+					local FICHEROCUENTA=$(RutaCuenta $NUMERO)
 					local SALDO=$(SaldoCuenta $NUMERO)
 					let SALDO=SALDO+CANTIDAD
 					echo "El saldo actual de la cuenta es: $SALDO"
-					sed -i '$a '"I:$CANTIDAD:$FECHA:$SALDO"'' $FICHEROCUENTA
-					sed -i "s/Total:.*/Total:$SALDO/" $FICHEROCUENTA
+					sed -i '$a '"I:$CANTIDAD:$FECHA"'' $FICHEROCUENTA
 					break
 				else
 					echo "Numero no valido."				
@@ -164,7 +198,7 @@ function Extracto(){
 	while [ $CONTROL = 1 ];do	
 		read -p "Por favor ingrese numero de cuenta: " NUMERO
 		if ComprobarCuenta $NUMERO;then
-			local FICHEROCUENTA=$RUTA/"c"$NUMERO".cue"
+			local FICHEROCUENTA=$(RutaCuenta $NUMERO)
 			echo "----------------------Datos cuenta----------------------"
 			echo "Cuenta nº: $NUMERO"
 			local LINEACUENTA
@@ -176,15 +210,16 @@ function Extracto(){
 			echo "Fecha creación: $FECHAC"
 			echo "----------------------Movimientos----------------------"
 			echo "Tipo	Cantidad	Fecha		Saldo Acumulado"
+			local ACUMULADO="";
 			while read line;do
-				if [ $CONT -eq 0 ];then
-					let CONT=CONT+1
-					continue		
-				fi
 				local TIPO=$(echo $line | cut -d ":" -f 1)
 				local CANTIDAD=$(echo $line | cut -d ":" -f 2)
 				local FECHA=$(echo $line | cut -d ":" -f 3)
-				local ACUMULADO=$(echo $line | cut -d ":" -f 4)
+				if [ $TIPO = "I" ];then
+					let ACUMULADO=ACUMULADO+CANTIDAD
+				else
+					let ACUMULADO=ACUMULADO-CANTIDAD
+				fi	
 				echo "$TIPO	$CANTIDAD		$FECHA	$ACUMULADO"
 			done < $FICHEROCUENTA
 			local SALDO=$(SaldoCuenta $NUMERO)
@@ -194,6 +229,35 @@ function Extracto(){
 			echo "El numero de cuenta no existe."
 		fi
 	done
+}
+function CantidadDescubiertos(){
+	local RUTA=$(RutaBanco)
+	local FILE=$RUTA/clientes.conf
+	local NUMERODECUENTAS=$(tail -n 1 $FILE | cut -d ":" -f 1)
+	local CUENTAACTUAL=1
+	local CONTADOR=0
+	local LINEACUENTA=2
+	while [ $CUENTAACTUAL -le $NUMERODECUENTAS ];do
+		if [ $(SaldoCuenta $CUENTAACTUAL) -lt 0 ];then
+			local NOMBRE=$(sed -n "$LINEACUENTA"p $FILE | cut -d ":" -f 2)
+			local APELLIDO=$(sed -n "$LINEACUENTA"p $FILE | cut -d ":" -f 3)
+			echo "La cuenta numero $CUENTAACTUAL, con propietario $NOMBRE $APELLIDO, esta en descubierto"
+			let CONTADOR++		
+
+		fi
+		let CUENTAACTUAL++
+		let LINEACUENTA++
+	done
+	echo "La cantidad de cuentas descubiertas es: $CONTADOR"
+}
+function ModificarDescubierto(){
+	local RUTA=$(RutaBanco)
+	local FILE=$RUTA/clientes.conf
+	local NUEVODESCUBIERTO
+	local NUMERO
+	read -p "¿Que cuenta desea modificar? " NUMERO
+	read -p "¿Cual va a ser el nuevo descubierto? " NUEVODESCUBIERTO
+	sed -i 's/^\('$NUMERO':.*:.*:.*:\)\(.*\)/\1-'$NUEVODESCUBIERTO'/g' $FILE
 }
 function Menu(){
 	local OPCION
@@ -205,7 +269,9 @@ function Menu(){
 		echo "2-Pagar recibo"
 		echo "3-Realizar Ingreso"
 		echo "4-Extracto"
-		echo "5-Salir"
+		echo "5-Cantidad De Descubiertos"
+		echo "6-Modificar Descubierto"
+		echo "7-Salir"
 		read -n 1 -p "Cual es su eleccion: " OPCION
 		echo ""
 		case	$OPCION in
@@ -213,7 +279,9 @@ function Menu(){
 			2)PagarRecibo;;
 			3)RealizarIngreso;;
 			4)Extracto;;
-			5)echo "Que tenga un buen dia."
+			5)CantidadDescubiertos;;
+			6)ModificarDescubierto;;
+			7)echo "Que tenga un buen dia."
 			  exit;;
 			*)echo "Opcion no valida";;
 		esac
