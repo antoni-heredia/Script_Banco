@@ -1,2 +1,2 @@
 # Script_Banco
-Script de un banco
+Script para bash que simula un pequeño programa de control de un banco.
